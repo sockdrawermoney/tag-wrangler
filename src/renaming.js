@@ -1,27 +1,33 @@
-import {Progress} from "./progress";
-import {Prompt, Confirm} from "@ophidian/core";
-import {Notice, parseFrontMatterAliases, parseFrontMatterTags} from "obsidian";
-import {Tag, Replacement} from "./Tag";
-import {File} from "./File";
+// src/renaming.js
+import { Progress } from "./progress";
+import { Prompt } from "@ophidian/core"; // Remove Confirm import
+import { Notice, parseFrontMatterAliases, parseFrontMatterTags } from "obsidian";
+import { Tag, Replacement } from "./Tag";
+import { File } from "./File";
+import { ConfirmModal } from "./ConfirmModal"; // Import the custom ConfirmModal
 
-export async function renameTag(app, tagName, toName=tagName) {
-    const newName = await promptForNewName(tagName, toName);
-    if (newName === false) return;  // aborted
+/**
+ * Renames a tag from `tagName` to `toName` within the Obsidian vault.
+ * @param {App} app - The Obsidian app instance.
+ * @param {string} tagName - The current tag name.
+ * @param {string} [toName=tagName] - The new tag name.
+ */
+export async function renameTag(app, tagName, toName = tagName) {
+    const newName = await promptForNewName(app, tagName, toName);
+    if (newName === false) return; // aborted
 
     if (!newName || newName === tagName) {
         return new Notice("Unchanged or empty tag: No changes made.");
     }
 
-    const
-        oldTag  = new Tag(tagName),
-        newTag  = new Tag(newName),
-        replace = new Replacement(oldTag, newTag),
-        clashing = replace.willMergeTags(
-            allTags(app).reverse()   // find longest clash first
-        ),
-        shouldAbort = clashing &&
-            await shouldAbortDueToClash(clashing, oldTag, newTag)
-        ;
+    const oldTag = new Tag(tagName);
+    const newTag = new Tag(newName);
+    const replace = new Replacement(oldTag, newTag);
+    const clashing = replace.willMergeTags(
+        allTags(app).reverse() // find longest clash first
+    );
+    const shouldAbort = clashing &&
+        await shouldAbortDueToClash(app, clashing, oldTag, newTag);
 
     if (shouldAbort) return;
 
@@ -42,6 +48,12 @@ function allTags(app) {
     return Object.keys(app.metadataCache.getTags());
 }
 
+/**
+ * Finds all target files that contain the specified tag.
+ * @param {App} app - The Obsidian app instance.
+ * @param {Tag} tag - The tag to search for.
+ * @returns {Promise<Array<File>>} - An array of File instances.
+ */
 export async function findTargets(app, tag) {
     const targets = [];
     const progress = new Progress(`Searching for ${tag}/*`, "Matching files...");
@@ -60,32 +72,51 @@ export async function findTargets(app, tag) {
         return targets;
 }
 
-async function promptForNewName(tagName, newName=tagName) {
-    return await new Prompt()
+/**
+ * Prompts the user to enter a new tag name.
+ * @param {App} app - The Obsidian app instance.
+ * @param {string} tagName - The current tag name.
+ * @param {string} [newName=tagName] - The default new tag name.
+ * @returns {Promise<string|false>} - The new tag name or false if aborted.
+ */
+async function promptForNewName(app, tagName, newName = tagName) {
+    console.log("Creating Prompt with app:", app); // Debugging
+    return await new Prompt(app) // Pass `app` to Prompt
         .setTitle(`Renaming #${tagName} (and any sub-tags)`)
         .setContent("Enter new name (must be a valid Obsidian tag name):\n")
-        .setPattern("[^\u2000-\u206F\u2E00-\u2E7F'!\"#$%&\\(\\)*+,.:;<=>?@^`\\{\\|\\}~\\[\\]\\\\\\s]+")
+        .setPattern("[^\\u2000-\\u206F\\u2E00-\\u2E7F'!\"#$%&\\(\\)*+,.:;<=>?@^`\\{\\|\\}~\\[\\]\\\\\\s]+")
         .onInvalidEntry(t => new Notice(`"${t}" is not a valid Obsidian tag name`))
         .setValue(newName)
-        .prompt()
-    ;
+        .prompt();
 }
 
-async function shouldAbortDueToClash([origin, clash], oldTag, newTag) {
-    return !await new Confirm()
-        .setTitle("WARNING: No Undo!")
-        .setContent(
-            activeWindow.createEl("p", undefined, el => { el.innerHTML =
-                `Renaming <code>${oldTag}</code> to <code>${newTag}</code> will merge ${
-                    (origin.canonical === oldTag.canonical) ?
-                        `these tags` : `multiple tags
-                        into existing tags (such as <code>${origin}</code>
-                        merging with <code>${clash}</code>)`
-                }.<br><br>
-                This <b>cannot</b> be undone.  Do you wish to proceed?`;
-            })
-        )
-        .setup(c => c.okButton.addClass("mod-warning"))
-        .confirm()
-    ;
+/**
+ * Asks the user to confirm aborting due to tag clashes.
+ * @param {App} app - The Obsidian app instance.
+ * @param {Array} clash - An array containing the origin and clashing tag.
+ * @param {Tag} oldTag - The original tag being renamed.
+ * @param {Tag} newTag - The new tag name.
+ * @returns {Promise<boolean>} - True if the user chooses to abort, false otherwise.
+ */
+async function shouldAbortDueToClash(app, clash, oldTag, newTag) {
+    const [origin, clashTag] = clash;
+    console.log("Creating ConfirmModal with app:", app); // Debugging
+
+    return new Promise((resolve) => {
+        new ConfirmModal(
+            app,
+            "WARNING: No Undo!",
+            `Renaming <code>${oldTag}</code> to <code>${newTag}</code> will merge ${
+                (origin.canonical === oldTag.canonical) ?
+                    `these tags` : `multiple tags into existing tags (such as <code>${origin}</code> merging with <code>${clashTag}</code>)`
+            }.<br><br>
+            This <b>cannot</b> be undone. Do you wish to proceed?`,
+            () => {
+                resolve(false); // User confirmed to proceed
+            },
+            () => {
+                resolve(true); // User chose to abort
+            }
+        ).open();
+    });
 }
